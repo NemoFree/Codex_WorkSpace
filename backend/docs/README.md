@@ -4,14 +4,14 @@
 
 ```bash
 cp .env.example .env
-docker compose up -d --build
+docker-compose up -d --build
 ```
 
 Windows PowerShell:
 
 ```powershell
 Copy-Item .env.example .env
-docker compose up -d --build
+docker-compose up -d --build
 ```
 
 Helpful task runners:

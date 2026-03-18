@@ -1,5 +1,6 @@
 COMPOSE_FILE=backend/docker-compose.yml
 ENV_FILE=backend/.env
+DOCKER_COMPOSE?=docker-compose
 
 .PHONY: help env up down restart logs ps rebuild lint format compose-config
 
@@ -20,24 +21,24 @@ env:
 	@if [ ! -f $(ENV_FILE) ]; then cp backend/.env.example $(ENV_FILE); fi
 
 up: env
-	docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) up -d --build
+	$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) --env-file $(ENV_FILE) up -d --build
 
 down:
-	docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) down
+	$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) --env-file $(ENV_FILE) down
 
 restart: down up
 
 logs:
-	docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) logs -f --tail=200
+	$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) --env-file $(ENV_FILE) logs -f --tail=200
 
 ps:
-	docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) ps
+	$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) --env-file $(ENV_FILE) ps
 
 rebuild:
-	docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) up -d --build --force-recreate
+	$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) --env-file $(ENV_FILE) up -d --build --force-recreate
 
 compose-config:
-	docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) config
+	$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) --env-file $(ENV_FILE) config
 
 lint:
 	ruff check backend
