@@ -4,7 +4,9 @@ from contextlib import contextmanager
 import psycopg
 
 
-DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://app:app@localhost:5432/knowledge')
+DATABASE_URL = os.getenv(
+    "DATABASE_URL", "postgresql://app:app@localhost:5432/knowledge"
+)
 
 
 @contextmanager
