@@ -7,6 +7,17 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
+Windows PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+docker compose up -d --build
+```
+
+Helpful task runners:
+- GNU Make: `make up`, `make down`, `make logs`
+- just: `just up`, `just down`, `just logs`
+
 Endpoints:
 - Gateway: `http://localhost:8080/healthz`
 - Identity: `http://localhost:8081/healthz`
@@ -33,3 +44,8 @@ Pass these headers when calling APIs:
 - `X-Tenant-Id`
 - `X-User-Id`
 - `X-Role`
+
+## 4) CI and API collection
+
+- GitHub Actions workflow: `.github/workflows/ci.yml`
+- Postman collection: `backend/docs/postman/internal-kb-ai-gateway.postman_collection.json`
