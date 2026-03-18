@@ -3,6 +3,7 @@ set shell := ["powershell", "-NoLogo", "-Command"]
 compose_file := "backend/docker-compose.yml"
 env_file := "backend/.env"
 docker_compose := "docker-compose"
+python_cmd := "\"$env:LOCALAPPDATA\\Programs\\Python\\Python311\\python.exe\""
 
 default:
     just --list
@@ -35,3 +36,16 @@ lint:
 
 format:
     ruff format backend
+
+install-dev:
+    {{python_cmd}} -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+
+hooks-install:
+    {{python_cmd}} -m pre_commit install
+    {{python_cmd}} -m pre_commit install --hook-type commit-msg
+
+check:
+    {{python_cmd}} -m pre_commit run --all-files
+
+release-tag tag:
+    git tag -a {{tag}} -m "Release {{tag}}"
