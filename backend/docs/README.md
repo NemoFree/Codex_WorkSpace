@@ -17,6 +17,9 @@ docker-compose up -d --build
 Helpful task runners:
 - GNU Make: `make up`, `make down`, `make logs`
 - just: `just up`, `just down`, `just logs`
+- Install dev deps: `just install-dev`
+- Install git hooks: `just hooks-install`
+- Run full checks: `just check`
 
 Endpoints:
 - Gateway: `http://localhost:8080/healthz`
@@ -48,4 +51,11 @@ Pass these headers when calling APIs:
 ## 4) CI and API collection
 
 - GitHub Actions workflow: `.github/workflows/ci.yml`
+- GitHub release workflow: `.github/workflows/release.yml`
 - Postman collection: `backend/docs/postman/internal-kb-ai-gateway.postman_collection.json`
+
+## 5) Learning and iteration docs
+
+- Development playbook: `backend/docs/development-playbook.md`
+- Commit message validator: `backend/scripts/validate_commit_msg.py`
+- Pre-commit config: `.pre-commit-config.yaml`
