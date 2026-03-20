@@ -9,6 +9,7 @@ from redis import Redis
 
 from libs.common_auth import Actor, get_actor
 from libs.common_db import get_conn
+from libs.common_embedding import embed_text, to_vector_literal
 from libs.common_observability import setup_logging
 
 setup_logging("knowledge-service")
@@ -23,10 +24,11 @@ class DocumentCreate(BaseModel):
     title: str
     source_type: str = Field(default="upload")
     storage_uri: str | None = None
+    content: str | None = Field(default=None, min_length=1)
 
 
 class SearchRequest(BaseModel):
-    query: str
+    query: str = Field(min_length=1)
     top_k: int = Field(default=5, ge=1, le=20)
 
 
@@ -61,7 +63,14 @@ def create_document(
             )
 
     redis_client.rpush(
-        "ingest_jobs", json.dumps({"tenant_id": actor.tenant_id, "document_id": doc_id})
+        "ingest_jobs",
+        json.dumps(
+            {
+                "tenant_id": actor.tenant_id,
+                "document_id": doc_id,
+                "content": payload.content,
+            }
+        ),
     )
     return {"document_id": doc_id, "status": "queued"}
 
@@ -150,24 +159,60 @@ def delete_document(
 
 @app.post("/v1/rag/search")
 def rag_search(payload: SearchRequest, actor: Actor = Depends(get_actor)) -> dict:
+    query_vector = to_vector_literal(embed_text(payload.query))
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, content, metadata_jsonb
-                FROM document_chunks
-                WHERE tenant_id = %s AND content ILIKE %s
+                SELECT dc.id, dc.content, dc.metadata_jsonb, 1 - (cv.embedding <=> %s::vector) AS score
+                FROM document_chunks dc
+                JOIN documents d ON d.id = dc.document_id
+                JOIN chunk_vectors cv ON cv.chunk_id = dc.id
+                WHERE dc.tenant_id = %s
+                  AND cv.tenant_id = %s
+                  AND d.tenant_id = %s
+                  AND d.deleted_at IS NULL
+                ORDER BY cv.embedding <=> %s::vector
                 LIMIT %s
                 """,
-                (actor.tenant_id, f"%{payload.query}%", payload.top_k),
+                (
+                    query_vector,
+                    actor.tenant_id,
+                    actor.tenant_id,
+                    actor.tenant_id,
+                    query_vector,
+                    payload.top_k,
+                ),
             )
             rows = cur.fetchall()
+
+            if not rows:
+                cur.execute(
+                    """
+                    SELECT dc.id, dc.content, dc.metadata_jsonb, NULL::double precision AS score
+                    FROM document_chunks dc
+                    JOIN documents d ON d.id = dc.document_id
+                    WHERE dc.tenant_id = %s
+                      AND d.tenant_id = %s
+                      AND d.deleted_at IS NULL
+                      AND dc.content ILIKE %s
+                    LIMIT %s
+                    """,
+                    (
+                        actor.tenant_id,
+                        actor.tenant_id,
+                        f"%{payload.query}%",
+                        payload.top_k,
+                    ),
+                )
+                rows = cur.fetchall()
 
     hits = [
         {
             "chunk_id": str(r[0]),
             "content": r[1],
             "metadata": r[2],
+            "score": float(r[3]) if r[3] is not None else None,
         }
         for r in rows
     ]
