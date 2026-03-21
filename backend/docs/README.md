@@ -60,5 +60,6 @@ Pass these headers when calling APIs:
 - Development guide (detailed): `backend/docs/development-guide.md`
 - Deployment guide (detailed): `backend/docs/deployment-guide.md`
 - Reuse playbook (new machine checklist + pitfalls): `backend/docs/reuse-playbook.md`
+- Chronicle (timeline + issues and fixes): `backend/docs/chronicle.md`
 - Commit message validator: `backend/scripts/validate_commit_msg.py`
 - Pre-commit config: `.pre-commit-config.yaml`
