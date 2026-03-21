@@ -57,5 +57,8 @@ Pass these headers when calling APIs:
 ## 5) Learning and iteration docs
 
 - Development playbook: `backend/docs/development-playbook.md`
+- Development guide (detailed): `backend/docs/development-guide.md`
+- Deployment guide (detailed): `backend/docs/deployment-guide.md`
+- Reuse playbook (new machine checklist + pitfalls): `backend/docs/reuse-playbook.md`
 - Commit message validator: `backend/scripts/validate_commit_msg.py`
 - Pre-commit config: `.pre-commit-config.yaml`
