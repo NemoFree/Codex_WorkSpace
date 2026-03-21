@@ -60,7 +60,7 @@ def get_quota(tenant_id: str, actor: Actor = Depends(get_actor)) -> dict:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT p.metric, p.limit_value, p.window, u.used_value, u.window_start
+                SELECT p.metric, p.limit_value, p.window_name, u.used_value, u.window_start
                 FROM quota_policies p
                 LEFT JOIN quota_usages u
                     ON u.tenant_id = p.tenant_id

@@ -101,9 +101,9 @@ CREATE TABLE IF NOT EXISTS quota_policies (
     tenant_id UUID NOT NULL REFERENCES tenants(id),
     metric TEXT NOT NULL,
     limit_value BIGINT NOT NULL,
-    window TEXT NOT NULL,
+    window_name TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (tenant_id, metric, window)
+    UNIQUE (tenant_id, metric, window_name)
 );
 
 CREATE TABLE IF NOT EXISTS quota_usages (

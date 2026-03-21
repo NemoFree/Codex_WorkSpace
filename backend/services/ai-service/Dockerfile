@@ -1,4 +1,5 @@
-FROM python:3.11-slim
+ARG DOCKER_REGISTRY=docker.io
+FROM ${DOCKER_REGISTRY}/library/python:3.11-slim
 
 WORKDIR /app
 
