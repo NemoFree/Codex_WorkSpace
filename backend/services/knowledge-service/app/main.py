@@ -48,7 +48,7 @@ class UploadResponse(BaseModel):
     size: int
 
 
-UI_VERSION = "2026-03-22-ui-upload-1"
+UI_VERSION = "2026-03-22-ui-clickfix-1"
 
 KNOWLEDGE_UI_HTML = """
 <!doctype html>
@@ -745,12 +745,23 @@ KNOWLEDGE_UI_HTML = """
       renderHits(data.hits || []);
     }
 
-    document.getElementById("refreshBtn").addEventListener("click", loadDocs);
-    document.getElementById("deleteBtn").addEventListener("click", deleteDoc);
-    document.getElementById("uploadBtn").addEventListener("click", uploadFile);
-    document.getElementById("createBtn").addEventListener("click", createDoc);
-    document.getElementById("searchBtn").addEventListener("click", doSearch);
-    document.getElementById("searchQuery").addEventListener("keydown", (e) => {
+    function bind(id, eventName, handler) {
+      const el = document.getElementById(id);
+      if (!el) {
+        console.warn("missing element:", id);
+        showToast("missing element: " + id, "bad");
+        return false;
+      }
+      el.addEventListener(eventName, handler);
+      return true;
+    }
+
+    bind("refreshBtn", "click", loadDocs);
+    bind("deleteBtn", "click", deleteDoc);
+    bind("uploadBtn", "click", uploadFile);
+    bind("createBtn", "click", createDoc);
+    bind("searchBtn", "click", doSearch);
+    bind("searchQuery", "keydown", (e) => {
       if (e.key === "Enter") doSearch();
     });
 
@@ -765,7 +776,7 @@ KNOWLEDGE_UI_HTML = """
       }
     }
 
-    document.getElementById("summaryBtn").addEventListener("click", refreshSummary);
+    bind("summaryBtn", "click", refreshSummary);
 
     async function viewDLQ() {
       const node = document.getElementById("dlqText");
@@ -793,8 +804,8 @@ KNOWLEDGE_UI_HTML = """
       }
     }
 
-    document.getElementById("dlqBtn").addEventListener("click", viewDLQ);
-    document.getElementById("dlqRequeueBtn").addEventListener("click", requeueDLQ);
+    bind("dlqBtn", "click", viewDLQ);
+    bind("dlqRequeueBtn", "click", requeueDLQ);
 
     function scheduleAutoRefresh() {
       const enabled = document.getElementById("autoRefresh").checked;
