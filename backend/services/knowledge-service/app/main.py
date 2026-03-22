@@ -3,7 +3,7 @@ import os
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from redis import Redis
@@ -12,6 +12,7 @@ from libs.common_auth import Actor, get_actor
 from libs.common_db import get_conn
 from libs.common_embedding import embed_text, to_vector_literal
 from libs.common_observability import setup_logging
+from libs.common_s3 import ensure_bucket_exists, load_s3_config, put_bytes, storage_uri_for
 
 setup_logging("knowledge-service")
 
@@ -19,6 +20,7 @@ app = FastAPI(title="knowledge-service", version="0.1.0")
 redis_client = Redis.from_url(
     os.getenv("REDIS_URL", "redis://localhost:6379/0"), decode_responses=True
 )
+UPLOAD_MAX_BYTES = int(os.getenv("UPLOAD_MAX_BYTES", "5000000"))
 
 
 class DocumentCreate(BaseModel):
@@ -38,7 +40,15 @@ class DLQRequeueRequest(BaseModel):
     reset_attempt: bool = True
 
 
-UI_VERSION = "2026-03-22-ui-feedback-2"
+class UploadResponse(BaseModel):
+    bucket: str
+    key: str
+    storage_uri: str
+    etag: str | None = None
+    size: int
+
+
+UI_VERSION = "2026-03-22-ui-upload-1"
 
 KNOWLEDGE_UI_HTML = """
 <!doctype html>
@@ -330,7 +340,7 @@ KNOWLEDGE_UI_HTML = """
       color: #156b57;
     }
     .toast.hidden { display: none; }
-    #createMsg, #deleteMsg {
+    #createMsg, #deleteMsg, #uploadMsg {
       display: block;
       margin-top: 8px;
       min-height: 16px;
@@ -402,13 +412,21 @@ KNOWLEDGE_UI_HTML = """
           <span id="deleteMsg" class="muted"></span>
         </div>
 
-        <h2 style="margin: 0 0 8px; font-size: 15px;">Create Document</h2>
-        <input id="newTitle" type="text" placeholder="Document title" />
-        <div style="height: 8px"></div>
-        <textarea id="newContent" placeholder="Paste text content for indexing..."></textarea>
-        <div style="height: 8px"></div>
-        <button id="createBtn" type="button" class="btn-accent">Create & Queue</button>
-        <span id="createMsg" class="muted"></span>
+          <h2 style="margin: 0 0 8px; font-size: 15px;">Create Document</h2>
+          <input id="newTitle" type="text" placeholder="Document title" />
+          <div style="height: 8px"></div>
+          <input id="newStorageUri" type="text" placeholder="storage_uri (s3://...)" readonly />
+          <div style="height: 8px"></div>
+          <div class="controls">
+            <input id="uploadFile" type="file" />
+            <button id="uploadBtn" type="button">Upload</button>
+          </div>
+          <span id="uploadMsg" class="muted"></span>
+          <div style="height: 8px"></div>
+          <textarea id="newContent" placeholder="Paste text content for indexing..."></textarea>
+          <div style="height: 8px"></div>
+          <button id="createBtn" type="button" class="btn-accent">Create & Queue</button>
+          <span id="createMsg" class="muted"></span>
 
           <div style="height: 16px"></div>
           <h2 style="margin: 0 0 8px; font-size: 15px;">Chunks</h2>
@@ -473,6 +491,12 @@ KNOWLEDGE_UI_HTML = """
         throw new Error(path + " -> " + res.status + " " + txt);
       }
       return res.json();
+    }
+
+    function headersNoJson() {
+      const h = headers();
+      delete h["Content-Type"];
+      return h;
     }
 
     function fmt(v) {
@@ -611,9 +635,62 @@ KNOWLEDGE_UI_HTML = """
       }
     }
 
+    async function uploadFile() {
+      const fileInput = document.getElementById("uploadFile");
+      const msg = document.getElementById("uploadMsg");
+      const btn = document.getElementById("uploadBtn");
+      const uri = document.getElementById("newStorageUri");
+
+      msg.textContent = "";
+      msg.className = "muted";
+      if (!fileInput || !fileInput.files || !fileInput.files.length) {
+        msg.textContent = "choose a file first";
+        msg.className = "muted status-bad";
+        showToast("choose a file first", "bad");
+        return;
+      }
+
+      const f = fileInput.files[0];
+      const fd = new FormData();
+      fd.append("file", f);
+
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Uploading...";
+      }
+      msg.textContent = "uploading...";
+      showToast("uploading...", "");
+      try {
+        const res = await fetch("/v1/uploads", {
+          method: "POST",
+          headers: headersNoJson(),
+          body: fd
+        });
+        if (!res.ok) {
+          const txt = await res.text();
+          throw new Error("/v1/uploads -> " + res.status + " " + txt);
+        }
+        const data = await res.json();
+        if (uri) uri.value = data.storage_uri || "";
+        msg.textContent = "uploaded: " + (data.storage_uri || "");
+        msg.className = "muted status-ok";
+        showToast(msg.textContent, "ok");
+      } catch (err) {
+        msg.textContent = String(err);
+        msg.className = "muted status-bad";
+        showToast(String(err), "bad");
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = "Upload";
+        }
+      }
+    }
+
     async function createDoc() {
       const title = document.getElementById("newTitle").value.trim();
       const content = document.getElementById("newContent").value.trim();
+      const storageUri = (document.getElementById("newStorageUri").value || "").trim();
       const msg = document.getElementById("createMsg");
       const btn = document.getElementById("createBtn");
       if (!title) {
@@ -632,6 +709,7 @@ KNOWLEDGE_UI_HTML = """
       const payload = {
         title,
         source_type: "upload",
+        storage_uri: storageUri || null,
         content: content || null
       };
       try {
@@ -669,6 +747,7 @@ KNOWLEDGE_UI_HTML = """
 
     document.getElementById("refreshBtn").addEventListener("click", loadDocs);
     document.getElementById("deleteBtn").addEventListener("click", deleteDoc);
+    document.getElementById("uploadBtn").addEventListener("click", uploadFile);
     document.getElementById("createBtn").addEventListener("click", createDoc);
     document.getElementById("searchBtn").addEventListener("click", doSearch);
     document.getElementById("searchQuery").addEventListener("keydown", (e) => {
@@ -758,6 +837,95 @@ def knowledge_ui() -> str:
             "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
             "Pragma": "no-cache",
         },
+    )
+
+
+def _parse_multipart_form_file(
+    *, body: bytes, boundary: bytes, field_name: str = "file"
+) -> tuple[str, str, bytes]:
+    marker = b"--" + boundary
+    parts = body.split(marker)
+    for part in parts:
+        if not part:
+            continue
+        if part.startswith(b"--"):
+            continue
+        part = part.lstrip(b"\r\n").rstrip(b"\r\n")
+        head, sep, content = part.partition(b"\r\n\r\n")
+        if not sep:
+            continue
+        headers = {}
+        for line in head.split(b"\r\n"):
+            if b":" not in line:
+                continue
+            k, v = line.split(b":", 1)
+            headers[k.strip().lower()] = v.strip()
+
+        cd = headers.get(b"content-disposition", b"").decode("utf-8", errors="replace")
+        if "form-data" not in cd:
+            continue
+        if f'name="{field_name}"' not in cd:
+            continue
+        filename = "upload.bin"
+        if "filename=" in cd:
+            # filename="a.txt"
+            frag = cd.split("filename=", 1)[1].strip()
+            if frag.startswith('"'):
+                filename = frag.split('"', 2)[1]
+            else:
+                filename = frag.split(";", 1)[0].strip()
+        ctype = headers.get(b"content-type", b"application/octet-stream").decode(
+            "utf-8", errors="replace"
+        )
+        return filename, ctype, content
+
+    raise HTTPException(status_code=400, detail="multipart file field not found")
+
+
+@app.post("/v1/uploads", response_model=UploadResponse)
+async def upload_file(
+    request: Request,
+    actor: Actor = Depends(get_actor),
+) -> UploadResponse:
+    cfg = load_s3_config()
+    ensure_bucket_exists(cfg)
+
+    ct = request.headers.get("content-type", "")
+    if "multipart/form-data" not in ct or "boundary=" not in ct:
+        raise HTTPException(status_code=415, detail="expected multipart/form-data")
+    boundary = ct.split("boundary=", 1)[1].strip()
+    boundary = boundary.strip('"').encode("utf-8", errors="ignore")
+
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > UPLOAD_MAX_BYTES + 2 * 1024 * 1024:
+                raise HTTPException(status_code=413, detail="upload too large")
+        except ValueError:
+            pass
+
+    body = await request.body()
+    filename, content_type, data = _parse_multipart_form_file(
+        body=body, boundary=boundary, field_name="file"
+    )
+    if len(data) > UPLOAD_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="upload too large")
+
+    raw_name = (filename or "upload.bin").strip()
+    safe_name = "".join(
+        [c if (c.isalnum() or c in ("-", "_", ".", "@")) else "_" for c in raw_name]
+    )
+    key = f"{actor.tenant_id}/{uuid4()}-{safe_name}"
+
+    meta = put_bytes(cfg, key=key, data=data, content_type=content_type)
+    uri = storage_uri_for(str(meta["bucket"]), str(meta["key"]))
+
+    return UploadResponse(
+        bucket=str(meta["bucket"]),
+        key=str(meta["key"]),
+        storage_uri=uri,
+        etag=str(meta.get("etag") or ""),
+        size=int(meta["size"]),
     )
 
 

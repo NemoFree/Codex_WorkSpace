@@ -54,6 +54,12 @@
 注意：
 - `GET /v1/admin/ingest/summary` 需要 `X-Role=admin`，否则返回 403。
 
+### 2.4 文件上传链路（Upload -> S3 -> Ingest）
+1. 调用 `knowledge-service`：`POST /v1/uploads`（multipart/form-data）
+2. 服务把文件写入 MinIO（S3 兼容），返回 `storage_uri`（`s3://bucket/key`）
+3. 调用 `POST /v1/documents` 时带上 `storage_uri`（`content` 可为空）
+4. `worker-service` 在 `content` 为空时，会从 `storage_uri` 拉取文本并继续分块/向量化
+
 ## 3. 开发环境与依赖
 
 ### 3.1 依赖版本（建议）
@@ -108,6 +114,17 @@
 公共库：`backend/libs/common_llm`
 - `LITELLM_URL` 为空：返回 mock（`[mock] {content}`）
 - 配置后：调用 `POST {LITELLM_URL}/chat/completions`
+
+### 5.3 S3/MinIO（Upload）
+公共库：`backend/libs/common_s3`
+
+相关环境变量（knowledge/worker）：
+- `S3_ENDPOINT`（默认 `http://minio:9000`）
+- `S3_BUCKET`（默认 `kbdocs`，至少 3 个字符）
+- `S3_REGION`（默认 `us-east-1`）
+- `S3_ACCESS_KEY` / `S3_SECRET_KEY`（为空时回退 `MINIO_ROOT_USER/PASSWORD`）
+- `UPLOAD_MAX_BYTES`（knowledge 上传大小上限，默认 5MB）
+- `S3_MAX_BYTES`（worker 拉取对象上限，默认 5MB）
 
 ## 6. 开发时常见问题与排查顺序
 

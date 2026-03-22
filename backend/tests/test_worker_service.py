@@ -98,6 +98,16 @@ class WorkerServiceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 worker._build_source_text("t1", "d1", None)
 
+    def test_build_source_text_fetches_s3_when_payload_missing(self) -> None:
+        cursor = FakeCursor(fetchone_result=("Title", "s3://kb/t1/x.txt"))
+        with (
+            patch.object(worker, "get_conn", lambda: fake_get_conn(cursor)),
+            patch.object(worker, "get_bytes_from_storage_uri", lambda *_args, **_kw: b"hello s3"),
+        ):
+            txt = worker._build_source_text("t1", "d1", None)
+        self.assertIn("hello s3", txt)
+        self.assertIn("storage_uri: s3://kb/t1/x.txt", txt)
+
     def test_ingest_document_inserts_chunks_and_vectors(self) -> None:
         cursor = FakeCursor()
         long_text = " ".join(f"w{i}" for i in range(420))

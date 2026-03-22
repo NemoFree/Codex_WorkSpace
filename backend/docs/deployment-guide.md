@@ -122,6 +122,22 @@ powershell -NoLogo -ExecutionPolicy Bypass -File backend/scripts/smoke.ps1
 - `-BaseUrl http://localhost:8082`
 - `-TimeoutSec 60`
 
+### 5.5 文件上传（MinIO/S3）验证（可选）
+PowerShell 5.1 下建议用 `curl.exe` 做 multipart 上传：
+```powershell
+"hello from upload" | Out-File -Encoding utf8 -FilePath .\tmp_upload.txt
+$p=(Resolve-Path .\tmp_upload.txt).Path
+curl.exe -sS -X POST "http://localhost:8082/v1/uploads" `
+  -H "X-Tenant-Id: 11111111-1111-1111-1111-111111111111" `
+  -H "X-User-Id: 22222222-2222-2222-2222-222222222222" `
+  -H "X-Role: admin" `
+  -F "file=@$p;type=text/plain"
+```
+
+预期：
+- 返回 `storage_uri`（形如 `s3://kbdocs/...`）
+- 可将该 `storage_uri` 传给 `POST /v1/documents`（`content` 可为空），worker 仍能完成入库
+
 ## 6. 常见故障与定位
 
 ### 6.1 镜像拉取失败（Docker Hub 超时/无代理）

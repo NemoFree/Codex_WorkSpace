@@ -10,6 +10,7 @@ from redis import Redis
 from libs.common_db import get_conn
 from libs.common_embedding import chunk_text, embed_text, to_vector_literal
 from libs.common_observability import setup_logging
+from libs.common_s3 import get_bytes_from_storage_uri
 
 setup_logging("worker-service")
 logger = logging.getLogger("worker-service")
@@ -30,6 +31,7 @@ INGEST_MAX_ATTEMPTS = int(os.getenv("INGEST_MAX_ATTEMPTS", "5"))
 INGEST_RETRY_BASE_SECONDS = int(os.getenv("INGEST_RETRY_BASE_SECONDS", "2"))
 INGEST_RETRY_MAX_SECONDS = int(os.getenv("INGEST_RETRY_MAX_SECONDS", "60"))
 INGEST_RETRY_BATCH = int(os.getenv("INGEST_RETRY_BATCH", "20"))
+S3_MAX_BYTES = int(os.getenv("S3_MAX_BYTES", "5000000"))
 
 
 def _set_document_status(tenant_id: str, document_id: str, status: str) -> bool:
@@ -64,10 +66,17 @@ def _build_source_text(
         raise ValueError("document not found or deleted")
 
     parts: list[str] = []
-    if payload_content and payload_content.strip():
-        parts.append(payload_content.strip())
-
     title, storage_uri = row
+
+    content = (payload_content or "").strip()
+    if not content and storage_uri and str(storage_uri).startswith("s3://"):
+        # Best-effort: treat object as UTF-8 text for MVP. (PDF/Office parsing comes later.)
+        data = get_bytes_from_storage_uri(str(storage_uri), max_bytes=S3_MAX_BYTES)
+        content = data.decode("utf-8", errors="replace").lstrip("\ufeff").strip()
+
+    if content:
+        parts.append(content)
+
     if title:
         parts.append(f"title: {title}")
     if storage_uri:
@@ -356,4 +365,3 @@ def run() -> None:
 
 if __name__ == "__main__":
     run()
-
