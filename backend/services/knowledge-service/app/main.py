@@ -298,6 +298,31 @@ KNOWLEDGE_UI_HTML = """
     .danger:hover {
       background: rgba(173, 63, 63, 0.06);
     }
+    .toast {
+      position: fixed;
+      right: 16px;
+      bottom: 16px;
+      max-width: min(560px, calc(100vw - 32px));
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid rgba(15, 15, 15, 0.12);
+      background: rgba(255, 255, 255, 0.92);
+      box-shadow: 0 18px 38px rgba(10, 10, 10, 0.16);
+      font-size: 13px;
+      color: var(--text);
+      z-index: 9999;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .toast.bad {
+      border-color: rgba(173, 63, 63, 0.35);
+      color: var(--danger);
+    }
+    .toast.ok {
+      border-color: rgba(21, 107, 87, 0.35);
+      color: #156b57;
+    }
+    .toast.hidden { display: none; }
     @media (max-width: 1024px) {
       .grid {
         grid-template-columns: 1fr;
@@ -385,11 +410,30 @@ KNOWLEDGE_UI_HTML = """
     </section>
   </div>
 
+  <div id="toast" class="toast hidden"></div>
+
   <script>
     const state = {
       docs: [],
       selectedId: null
     };
+
+    function showToast(text, kind = "") {
+      const node = document.getElementById("toast");
+      if (!node) return;
+      node.textContent = String(text || "");
+      node.className = "toast" + (kind ? " " + kind : "");
+      if (!text) node.classList.add("hidden");
+      else node.classList.remove("hidden");
+    }
+
+    window.addEventListener("error", (e) => {
+      showToast("JS error: " + (e && e.message ? e.message : String(e)), "bad");
+    });
+    window.addEventListener("unhandledrejection", (e) => {
+      const reason = e && e.reason ? e.reason : e;
+      showToast("Unhandled rejection: " + String(reason), "bad");
+    });
 
     function headers() {
       return {
@@ -555,13 +599,19 @@ KNOWLEDGE_UI_HTML = """
       const title = document.getElementById("newTitle").value.trim();
       const content = document.getElementById("newContent").value.trim();
       const msg = document.getElementById("createMsg");
+      const btn = document.getElementById("createBtn");
       if (!title) {
         msg.textContent = "title is required";
         msg.className = "muted status-bad";
+        showToast("title is required", "bad");
         return;
       }
       msg.textContent = "creating...";
       msg.className = "muted";
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Creating...";
+      }
       const payload = {
         title,
         source_type: "upload",
@@ -574,10 +624,19 @@ KNOWLEDGE_UI_HTML = """
         });
         msg.textContent = "queued: " + data.document_id;
         msg.className = "muted status-ok";
+        showToast("queued: " + data.document_id, "ok");
+        state.selectedId = data.document_id;
+        await refreshSummary();
         await loadDocs();
       } catch (err) {
         msg.textContent = String(err);
         msg.className = "muted status-bad";
+        showToast(String(err), "bad");
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = "Create & Queue";
+        }
       }
     }
 
