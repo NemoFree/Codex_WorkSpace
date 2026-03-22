@@ -21,6 +21,9 @@ doctor: env
 doctor-preflight: env
     powershell -NoLogo -ExecutionPolicy Bypass -File "backend/scripts/doctor.ps1" -EnvFile {{env_file}} -ComposeFile {{compose_file}} -PreflightOnly
 
+smoke: env
+    powershell -NoLogo -ExecutionPolicy Bypass -File "backend/scripts/smoke.ps1"
+
 down:
     {{docker_compose}} -f {{compose_file}} --env-file {{env_file}} down
 

@@ -112,6 +112,16 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8082/v1/rag/search -Headers
 - 每条命中包含 `chunk_id/content/metadata`
 - `score` 为数值（向量检索）或 `null`（fallback ILIKE）
 
+### 5.4 一键 Smoke 脚本（推荐）
+如果你希望一条命令跑完整个闭环（创建文档 -> 等待 ready/failed -> RAG search）：
+```powershell
+powershell -NoLogo -ExecutionPolicy Bypass -File backend/scripts/smoke.ps1
+```
+
+可选参数：
+- `-BaseUrl http://localhost:8082`
+- `-TimeoutSec 60`
+
 ## 6. 常见故障与定位
 
 ### 6.1 镜像拉取失败（Docker Hub 超时/无代理）

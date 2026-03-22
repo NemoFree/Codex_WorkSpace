@@ -90,8 +90,11 @@ class KnowledgeServiceTests(unittest.TestCase):
         queue_name, raw_payload = redis_mock.rpush.call_args[0]
         self.assertEqual(queue_name, "ingest_jobs")
         data = json.loads(raw_payload)
+        self.assertTrue(data["job_id"])
         self.assertEqual(data["tenant_id"], "t1")
         self.assertEqual(data["content"], "hello world")
+        self.assertEqual(data["attempt"], 1)
+        self.assertTrue(data["queued_at"])
 
     def test_rag_search_falls_back_to_ilike_when_vector_returns_empty(self) -> None:
         cursor = FakeCursor(fetchall_results=[[], [("chunk-1", "hello", {}, None)]])

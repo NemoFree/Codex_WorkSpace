@@ -126,6 +126,18 @@
 3. 看 documents.status：
    - `docker exec kb_postgres psql -U app -d knowledge -c "select id,status from documents order by created_at desc limit 5;"`
 
+补充（入库可靠性队列）：
+- 主队列：`ingest_jobs`（list）
+- 重试调度：`ingest_retry`（zset，成员是 job_id，score 是下一次执行的 unix seconds）
+- payload 存储：`ingest_payload`（hash，job_id -> payload json）
+- 死信队列：`ingest_dlq`（list）
+
+相关环境变量（worker-service）：
+- `INGEST_MAX_ATTEMPTS`（默认 5）
+- `INGEST_RETRY_BASE_SECONDS`（默认 2）
+- `INGEST_RETRY_MAX_SECONDS`（默认 60）
+- `INGEST_RETRY_BATCH`（默认 20）
+
 ### 6.3 pgvector/数据库初始化失败
 本项目使用 `/docker-entrypoint-initdb.d/001_init.sql` 初始化。
 如果脚本语法错误，postgres 容器会退出，导致其它服务解析不到 `postgres`（表现为 `Name or service not known`）。

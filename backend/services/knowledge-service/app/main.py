@@ -728,6 +728,7 @@ def create_document(
     payload: DocumentCreate, actor: Actor = Depends(get_actor)
 ) -> dict[str, str]:
     doc_id = str(uuid4())
+    job_id = str(uuid4())
 
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -752,13 +753,16 @@ def create_document(
         "ingest_jobs",
         json.dumps(
             {
+                "job_id": job_id,
                 "tenant_id": actor.tenant_id,
                 "document_id": doc_id,
                 "content": payload.content,
+                "attempt": 1,
+                "queued_at": datetime.now(timezone.utc).isoformat(),
             }
         ),
     )
-    return {"document_id": doc_id, "status": "queued"}
+    return {"document_id": doc_id, "job_id": job_id, "status": "queued"}
 
 
 @app.get("/v1/admin/ingest/summary")
@@ -767,10 +771,20 @@ def ingest_summary(actor: Actor = Depends(get_actor)) -> dict:
         raise HTTPException(status_code=403, detail="forbidden")
 
     queue_len = -1
+    retry_len = -1
+    dlq_len = -1
     try:
         queue_len = int(redis_client.llen("ingest_jobs"))
     except Exception:
         queue_len = -1
+    try:
+        retry_len = int(redis_client.zcard("ingest_retry"))
+    except Exception:
+        retry_len = -1
+    try:
+        dlq_len = int(redis_client.llen("ingest_dlq"))
+    except Exception:
+        dlq_len = -1
 
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -814,6 +828,8 @@ def ingest_summary(actor: Actor = Depends(get_actor)) -> dict:
     return {
         "tenant_id": actor.tenant_id,
         "queue_len": queue_len,
+        "retry_len": retry_len,
+        "dlq_len": dlq_len,
         "status_counts": status_counts,
         "recent_documents": recent_documents,
     }
