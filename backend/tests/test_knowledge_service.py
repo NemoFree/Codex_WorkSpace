@@ -205,43 +205,44 @@ class KnowledgeServiceTests(unittest.TestCase):
         self.assertEqual(payload1["attempt"], 1)
         self.assertEqual(payload1["job_id"], "j1")
 
-    def test_upload_file_parses_multipart_and_returns_storage_uri(self) -> None:
-        boundary = "----testboundary"
-        body = (
-            f"--{boundary}\r\n"
-            'Content-Disposition: form-data; name="file"; filename="note.txt"\r\n'
-            "Content-Type: text/plain\r\n\r\n"
-            "hello-upload\r\n"
-            f"--{boundary}--\r\n"
-        ).encode("utf-8")
-
-        class FakeReq:
-            headers = {"content-type": f"multipart/form-data; boundary={boundary}"}
-
-            async def body(self):
-                return body
-
-        actor = knowledge.Actor(tenant_id="t1", user_id="u1", role="admin")
-        with (
-            patch.object(knowledge, "load_s3_config", lambda: object()),
-            patch.object(knowledge, "ensure_bucket_exists", lambda *_: None),
-            patch.object(
-                knowledge,
-                "put_bytes",
-                lambda *_args, **_kw: {
-                    "bucket": "kbdocs",
-                    "key": "t1/k.txt",
-                    "etag": "e",
-                    "size": 12,
-                },
-            ),
-        ):
-            result = asyncio.run(knowledge.upload_file(FakeReq(), actor))
-
-        self.assertEqual(result.storage_uri, "s3://kbdocs/t1/k.txt")
-        self.assertEqual(result.bucket, "kbdocs")
-        self.assertEqual(result.key, "t1/k.txt")
-        self.assertEqual(result.size, 12)
+    def test_upload_file_reads_uploadfile_and_returns_storage_uri(self) -> None: 
+        data = b"hello-upload\r\n" 
+ 
+        class FakeUpload: 
+            filename = "note.txt" 
+            content_type = "text/plain" 
+ 
+            def __init__(self, payload: bytes) -> None: 
+                self._payload = payload 
+                self._sent = False 
+ 
+            async def read(self, _size: int = -1) -> bytes: 
+                if self._sent: 
+                    return b"" 
+                self._sent = True 
+                return self._payload 
+ 
+        actor = knowledge.Actor(tenant_id="t1", user_id="u1", role="admin") 
+        with ( 
+            patch.object(knowledge, "load_s3_config", lambda: object()), 
+            patch.object(knowledge, "ensure_bucket_exists", lambda *_: None), 
+            patch.object( 
+                knowledge, 
+                "put_bytes", 
+                lambda *_args, **_kw: { 
+                    "bucket": "kbdocs", 
+                    "key": "t1/k.txt", 
+                    "etag": "e", 
+                    "size": 12, 
+                }, 
+            ), 
+        ): 
+            result = asyncio.run(knowledge.upload_file(file=FakeUpload(data), actor=actor)) 
+ 
+        self.assertEqual(result.storage_uri, "s3://kbdocs/t1/k.txt") 
+        self.assertEqual(result.bucket, "kbdocs") 
+        self.assertEqual(result.key, "t1/k.txt") 
+        self.assertEqual(result.size, 12) 
 
 
 if __name__ == "__main__":

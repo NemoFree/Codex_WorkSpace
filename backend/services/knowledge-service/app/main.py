@@ -3,7 +3,7 @@ import os
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from redis import Redis
@@ -851,76 +851,31 @@ def knowledge_ui() -> str:
     )
 
 
-def _parse_multipart_form_file(
-    *, body: bytes, boundary: bytes, field_name: str = "file"
-) -> tuple[str, str, bytes]:
-    marker = b"--" + boundary
-    parts = body.split(marker)
-    for part in parts:
-        if not part:
-            continue
-        if part.startswith(b"--"):
-            continue
-        part = part.lstrip(b"\r\n").rstrip(b"\r\n")
-        head, sep, content = part.partition(b"\r\n\r\n")
-        if not sep:
-            continue
-        headers = {}
-        for line in head.split(b"\r\n"):
-            if b":" not in line:
-                continue
-            k, v = line.split(b":", 1)
-            headers[k.strip().lower()] = v.strip()
-
-        cd = headers.get(b"content-disposition", b"").decode("utf-8", errors="replace")
-        if "form-data" not in cd:
-            continue
-        if f'name="{field_name}"' not in cd:
-            continue
-        filename = "upload.bin"
-        if "filename=" in cd:
-            # filename="a.txt"
-            frag = cd.split("filename=", 1)[1].strip()
-            if frag.startswith('"'):
-                filename = frag.split('"', 2)[1]
-            else:
-                filename = frag.split(";", 1)[0].strip()
-        ctype = headers.get(b"content-type", b"application/octet-stream").decode(
-            "utf-8", errors="replace"
-        )
-        return filename, ctype, content
-
-    raise HTTPException(status_code=400, detail="multipart file field not found")
+async def _read_uploadfile_limited(file: UploadFile, max_bytes: int) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(1024 * 1024)  # 1 MiB
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(status_code=413, detail="upload too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 @app.post("/v1/uploads", response_model=UploadResponse)
 async def upload_file(
-    request: Request,
+    file: UploadFile = File(...),
     actor: Actor = Depends(get_actor),
 ) -> UploadResponse:
     cfg = load_s3_config()
     ensure_bucket_exists(cfg)
 
-    ct = request.headers.get("content-type", "")
-    if "multipart/form-data" not in ct or "boundary=" not in ct:
-        raise HTTPException(status_code=415, detail="expected multipart/form-data")
-    boundary = ct.split("boundary=", 1)[1].strip()
-    boundary = boundary.strip('"').encode("utf-8", errors="ignore")
-
-    content_length = request.headers.get("content-length")
-    if content_length:
-        try:
-            if int(content_length) > UPLOAD_MAX_BYTES + 2 * 1024 * 1024:
-                raise HTTPException(status_code=413, detail="upload too large")
-        except ValueError:
-            pass
-
-    body = await request.body()
-    filename, content_type, data = _parse_multipart_form_file(
-        body=body, boundary=boundary, field_name="file"
-    )
-    if len(data) > UPLOAD_MAX_BYTES:
-        raise HTTPException(status_code=413, detail="upload too large")
+    filename = getattr(file, "filename", None) or "upload.bin"
+    content_type = getattr(file, "content_type", None) or "application/octet-stream"
+    data = await _read_uploadfile_limited(file, UPLOAD_MAX_BYTES)
 
     raw_name = (filename or "upload.bin").strip()
     safe_name = "".join(
