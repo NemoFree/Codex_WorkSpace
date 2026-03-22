@@ -159,6 +159,51 @@ class KnowledgeServiceTests(unittest.TestCase):
         self.assertEqual(result["recent_documents"][0]["id"], "doc-1")
         self.assertEqual(result["recent_documents"][0]["chunk_count"], 3)
 
+    def test_ingest_dlq_list_forbidden_for_non_admin(self) -> None:
+        actor = knowledge.Actor(tenant_id="t1", user_id="u1", role="user")
+        with self.assertRaises(knowledge.HTTPException) as ctx:
+            knowledge.ingest_dlq_list(actor=actor, limit=10)
+        self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_ingest_dlq_list_returns_latest_items(self) -> None:
+        redis_mock = MagicMock()
+        redis_mock.llen.return_value = 3
+        redis_mock.lrange.return_value = [
+            json.dumps({"job_id": "j1"}),
+            json.dumps({"job_id": "j2"}),
+        ]
+        actor = knowledge.Actor(tenant_id="t1", user_id="u1", role="admin")
+
+        with patch.object(knowledge, "redis_client", redis_mock):
+            result = knowledge.ingest_dlq_list(actor=actor, limit=2)
+
+        self.assertEqual(result["total"], 3)
+        self.assertEqual(len(result["items"]), 2)
+        self.assertEqual(result["items"][0]["job_id"], "j2")
+        self.assertEqual(result["items"][1]["job_id"], "j1")
+
+    def test_ingest_dlq_requeue_moves_valid_items(self) -> None:
+        redis_mock = MagicMock()
+        redis_mock.rpop.side_effect = [
+            json.dumps({"job_id": "j1", "tenant_id": "t1", "document_id": "d1", "attempt": 3}),
+            json.dumps({"tenant_id": "t1", "document_id": "d2"}),
+            None,
+        ]
+        actor = knowledge.Actor(tenant_id="t1", user_id="u1", role="admin")
+        req = knowledge.DLQRequeueRequest(count=3, reset_attempt=True)
+
+        with patch.object(knowledge, "redis_client", redis_mock):
+            result = knowledge.ingest_dlq_requeue(req, actor)
+
+        self.assertEqual(result["requested"], 3)
+        self.assertEqual(result["moved"], 2)
+        self.assertEqual(result["skipped"], 0)
+        self.assertEqual(redis_mock.rpush.call_count, 2)
+        _, raw1 = redis_mock.rpush.call_args_list[0][0]
+        payload1 = json.loads(raw1)
+        self.assertEqual(payload1["attempt"], 1)
+        self.assertEqual(payload1["job_id"], "j1")
+
 
 if __name__ == "__main__":
     unittest.main()

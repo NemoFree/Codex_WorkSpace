@@ -33,6 +33,11 @@ class SearchRequest(BaseModel):
     top_k: int = Field(default=5, ge=1, le=20)
 
 
+class DLQRequeueRequest(BaseModel):
+    count: int = Field(default=10, ge=1, le=200)
+    reset_attempt: bool = True
+
+
 UI_VERSION = "2026-03-22-ui-feedback-2"
 
 KNOWLEDGE_UI_HTML = """
@@ -375,9 +380,13 @@ KNOWLEDGE_UI_HTML = """
           <h2 style="margin: 0 0 8px; font-size: 15px;">Ingest Summary</h2>
           <div class="controls">
             <button id="summaryBtn">Refresh Summary</button>
+            <button id="dlqBtn">View DLQ</button>
+            <button id="dlqRequeueBtn">Requeue DLQ x10</button>
           </div>
           <div style="height: 8px"></div>
           <p id="summaryText" class="pre">loading...</p>
+          <div style="height: 8px"></div>
+          <p id="dlqText" class="pre"></p>
         </div>
       </article>
 
@@ -679,6 +688,35 @@ KNOWLEDGE_UI_HTML = """
 
     document.getElementById("summaryBtn").addEventListener("click", refreshSummary);
 
+    async function viewDLQ() {
+      const node = document.getElementById("dlqText");
+      node.textContent = "loading...";
+      try {
+        const data = await api("/v1/admin/ingest/dlq?limit=20", { method: "GET" });
+        node.textContent = JSON.stringify(data, null, 2);
+      } catch (err) {
+        node.textContent = String(err);
+      }
+    }
+
+    async function requeueDLQ() {
+      const node = document.getElementById("dlqText");
+      node.textContent = "requeuing...";
+      try {
+        const data = await api("/v1/admin/ingest/dlq/requeue", {
+          method: "POST",
+          body: JSON.stringify({ count: 10, reset_attempt: true })
+        });
+        node.textContent = JSON.stringify(data, null, 2);
+        await refreshSummary();
+      } catch (err) {
+        node.textContent = String(err);
+      }
+    }
+
+    document.getElementById("dlqBtn").addEventListener("click", viewDLQ);
+    document.getElementById("dlqRequeueBtn").addEventListener("click", requeueDLQ);
+
     function scheduleAutoRefresh() {
       const enabled = document.getElementById("autoRefresh").checked;
       if (!enabled) return;
@@ -833,6 +871,81 @@ def ingest_summary(actor: Actor = Depends(get_actor)) -> dict:
         "status_counts": status_counts,
         "recent_documents": recent_documents,
     }
+
+
+@app.get("/v1/admin/ingest/dlq")
+def ingest_dlq_list(
+    actor: Actor = Depends(get_actor),
+    limit: int = Query(default=20, ge=1, le=200),
+) -> dict:
+    if actor.role != "admin":
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    total = 0
+    try:
+        total = int(redis_client.llen("ingest_dlq"))
+    except Exception:
+        total = 0
+
+    try:
+        rows = redis_client.lrange("ingest_dlq", -limit, -1) or []
+    except Exception:
+        rows = []
+
+    items: list[dict] = []
+    for raw in reversed(rows):
+        try:
+            payload = json.loads(raw)
+            if isinstance(payload, dict):
+                items.append(payload)
+            else:
+                items.append({"raw": raw, "parse_error": "payload is not object"})
+        except Exception:
+            items.append({"raw": raw, "parse_error": "invalid json"})
+
+    return {"total": total, "items": items}
+
+
+@app.post("/v1/admin/ingest/dlq/requeue")
+def ingest_dlq_requeue(
+    payload: DLQRequeueRequest, actor: Actor = Depends(get_actor)
+) -> dict:
+    if actor.role != "admin":
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    moved = 0
+    skipped = 0
+    for _ in range(payload.count):
+        raw = redis_client.rpop("ingest_dlq")
+        if not raw:
+            break
+        try:
+            item = json.loads(raw)
+        except Exception:
+            skipped += 1
+            continue
+        if not isinstance(item, dict):
+            skipped += 1
+            continue
+
+        if payload.reset_attempt:
+            item["attempt"] = 1
+
+        item["queued_at"] = datetime.now(timezone.utc).isoformat()
+        item.pop("retry_at", None)
+        item.pop("failed_at", None)
+        item.pop("last_error", None)
+
+        if not item.get("job_id"):
+            item["job_id"] = str(uuid4())
+        if not item.get("tenant_id") or not item.get("document_id"):
+            skipped += 1
+            continue
+
+        redis_client.rpush("ingest_jobs", json.dumps(item))
+        moved += 1
+
+    return {"requested": payload.count, "moved": moved, "skipped": skipped}
 
 
 @app.get("/v1/documents")

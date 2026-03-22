@@ -138,6 +138,11 @@
 - `INGEST_RETRY_MAX_SECONDS`（默认 60）
 - `INGEST_RETRY_BATCH`（默认 20）
 
+管理员运维接口（`X-Role=admin`）：
+- `GET /v1/admin/ingest/summary`
+- `GET /v1/admin/ingest/dlq?limit=20`
+- `POST /v1/admin/ingest/dlq/requeue`（body: `count`, `reset_attempt`）
+
 ### 6.3 pgvector/数据库初始化失败
 本项目使用 `/docker-entrypoint-initdb.d/001_init.sql` 初始化。
 如果脚本语法错误，postgres 容器会退出，导致其它服务解析不到 `postgres`（表现为 `Name or service not known`）。
