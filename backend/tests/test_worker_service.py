@@ -2,7 +2,7 @@ from contextlib import contextmanager
 import importlib.util
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 import unittest
 
 
@@ -38,6 +38,8 @@ class FakeCursor:
         self.fetchone_result = fetchone_result
         self.fetchall_results = list(fetchall_results or [])
         self.executions: list[tuple[str, object]] = []
+        self._last_sql: str | None = None
+        self._last_params = None
 
     def __enter__(self):
         return self
@@ -47,9 +49,16 @@ class FakeCursor:
 
     def execute(self, sql: str, params=None) -> None:
         self.executions.append((sql, params))
+        self._last_sql = sql
+        self._last_params = params
 
     def fetchone(self):
-        return self.fetchone_result
+        if self.fetchone_result is not None:
+            return self.fetchone_result
+        # For INSERT ... RETURNING id, return the proposed id for predictable tests.
+        if self._last_sql and "RETURNING id" in self._last_sql and self._last_params:
+            return (self._last_params[0],)
+        return None
 
     def fetchall(self):
         if self.fetchall_results:
@@ -101,14 +110,51 @@ class WorkerServiceTests(unittest.TestCase):
 
         self.assertGreater(chunk_count, 1)
         sql_calls = [sql for sql, _ in cursor.executions]
-        self.assertEqual(
-            len([s for s in sql_calls if "INSERT INTO document_chunks" in s]),
-            chunk_count,
-        )
-        self.assertEqual(
-            len([s for s in sql_calls if "INSERT INTO chunk_vectors" in s]),
-            chunk_count,
-        )
+        chunk_upserts = [s for s in sql_calls if "INSERT INTO document_chunks" in s]
+        vector_upserts = [s for s in sql_calls if "INSERT INTO chunk_vectors" in s]
+        self.assertEqual(len(chunk_upserts), chunk_count)
+        self.assertEqual(len(vector_upserts), chunk_count)
+        self.assertTrue(any("ON CONFLICT (document_id, chunk_no)" in s for s in chunk_upserts))
+        self.assertTrue(any("ON CONFLICT (chunk_id)" in s for s in vector_upserts))
+        self.assertEqual(len([s for s in sql_calls if "DELETE FROM document_chunks" in s]), 1)
+
+    def test_compute_retry_delay_seconds_uses_exponential_backoff(self) -> None:
+        with (
+            patch.object(worker, "INGEST_RETRY_BASE_SECONDS", 2),
+            patch.object(worker, "INGEST_RETRY_MAX_SECONDS", 60),
+        ):
+            self.assertEqual(worker._compute_retry_delay_seconds(1), 2)
+            self.assertEqual(worker._compute_retry_delay_seconds(2), 4)
+            self.assertEqual(worker._compute_retry_delay_seconds(3), 8)
+
+    def test_schedule_retry_or_dlq_schedules_retry_until_max_attempts(self) -> None:
+        redis_mock = MagicMock()
+        with (
+            patch.object(worker, "INGEST_MAX_ATTEMPTS", 3),
+            patch.object(worker, "INGEST_RETRY_BASE_SECONDS", 2),
+            patch.object(worker, "INGEST_RETRY_MAX_SECONDS", 60),
+        ):
+            payload = {"job_id": "job-1", "attempt": 1, "tenant_id": "t1", "document_id": "d1"}
+            action = worker._schedule_retry_or_dlq(redis_mock, payload, last_error="boom", now_ts=1000)
+            self.assertEqual(action, "retry")
+            redis_mock.hset.assert_called()
+            redis_mock.zadd.assert_called_with(worker.QUEUE_RETRY, {"job-1": 1002})
+
+            redis_mock.reset_mock()
+            payload2 = {"job_id": "job-1", "attempt": 3, "tenant_id": "t1", "document_id": "d1"}
+            action2 = worker._schedule_retry_or_dlq(redis_mock, payload2, last_error="boom", now_ts=1000)
+            self.assertEqual(action2, "dlq")
+            redis_mock.rpush.assert_called()
+
+    def test_move_due_retries_requeues_only_existing_payloads(self) -> None:
+        redis_mock = MagicMock()
+        redis_mock.zrangebyscore.return_value = ["job-1", "job-2"]
+        redis_mock.hget.side_effect = ["{\\\"job_id\\\":\\\"job-1\\\"}", None]
+
+        moved = worker._move_due_retries(redis_mock, now_ts=2000)
+        self.assertEqual(moved, 1)
+        self.assertEqual(redis_mock.rpush.call_count, 1)
+        redis_mock.rpush.assert_called_with(worker.QUEUE_MAIN, "job-1")
 
 
 if __name__ == "__main__":
