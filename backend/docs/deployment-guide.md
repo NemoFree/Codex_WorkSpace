@@ -40,6 +40,9 @@
 从仓库根目录执行：
 - `docker-compose -f backend/docker-compose.yml --env-file backend/.env up -d --build`
 
+推荐先跑一次自检（串行输出每一步结果）：
+- `just doctor`（或 `just doctor-preflight` 只做启动前检查）
+
 ### 3.2 查看状态
 - `docker-compose -f backend/docker-compose.yml --env-file backend/.env ps`
 

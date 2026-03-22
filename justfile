@@ -12,7 +12,14 @@ env:
     if (!(Test-Path {{env_file}})) { Copy-Item "backend/.env.example" {{env_file}} }
 
 up: env
+    powershell -NoLogo -ExecutionPolicy Bypass -File "backend/scripts/select_docker_registry.ps1" -EnvFile {{env_file}}
     {{docker_compose}} -f {{compose_file}} --env-file {{env_file}} up -d --build
+
+doctor: env
+    powershell -NoLogo -ExecutionPolicy Bypass -File "backend/scripts/doctor.ps1" -EnvFile {{env_file}} -ComposeFile {{compose_file}}
+
+doctor-preflight: env
+    powershell -NoLogo -ExecutionPolicy Bypass -File "backend/scripts/doctor.ps1" -EnvFile {{env_file}} -ComposeFile {{compose_file}} -PreflightOnly
 
 down:
     {{docker_compose}} -f {{compose_file}} --env-file {{env_file}} down
