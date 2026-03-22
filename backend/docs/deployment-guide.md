@@ -60,6 +60,13 @@ PowerShell 示例：
 Invoke-RestMethod http://localhost:8082/healthz
 ```
 
+## 4.1 可视化控制台（可选，但推荐）
+打开 Knowledge Console UI（同一套 API 的可视化操作台）：
+- `http://localhost:8082/ui/knowledge`
+
+页面会用你填写的 Header 调用 API；如果你需要看入库状态汇总：
+- `GET /v1/admin/ingest/summary`（需要 `X-Role=admin`）
+
 ## 5. 端到端 Smoke（入库 -> worker -> 检索）
 
 ### 5.1 创建文档（入队）
@@ -123,4 +130,3 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8082/v1/rag/search -Headers
 3. 重新拉起 postgres：`docker-compose ... up -d postgres`
 4. 必要时补跑 SQL：
    - `docker exec -i kb_postgres psql -U app -d knowledge -f /docker-entrypoint-initdb.d/001_init.sql`
-

@@ -25,6 +25,7 @@ Endpoints:
 - Gateway: `http://localhost:8080/healthz`
 - Identity: `http://localhost:8081/healthz`
 - Knowledge: `http://localhost:8082/healthz`
+- Knowledge UI: `http://localhost:8082/ui/knowledge`
 - AI: `http://localhost:8083/healthz`
 - Ops: `http://localhost:8084/healthz`
 

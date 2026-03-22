@@ -40,6 +40,20 @@
 3. 用 pgvector 排序：`ORDER BY embedding <=> query_vector LIMIT top_k`
 4. 若无结果：回退 ILIKE（MVP 兜底）
 
+### 2.3 本地可视化（Knowledge Console UI）
+在本地启动栈后，可直接打开：
+- `GET http://localhost:8082/ui/knowledge`
+
+这个页面会用你填写的 Header 调用同一套 API（便于在不写脚本的情况下观察入库与检索）：
+- Documents：列表、详情、Chunk 列表
+- Create Document：创建并入队（触发 worker 入库）
+- RAG Search：向量检索（必要时 fallback）
+- Ingest Summary：查看队列长度、各状态文档计数、最近文档及 chunk 数
+- Delete Document：软删除（仅标记 `deleted_at`）
+
+注意：
+- `GET /v1/admin/ingest/summary` 需要 `X-Role=admin`，否则返回 403。
+
 ## 3. 开发环境与依赖
 
 ### 3.1 依赖版本（建议）
@@ -121,4 +135,3 @@
 2. 重新拉起 postgres
 3. 必要时手动补跑脚本（可重复执行）：
    - `docker exec -i kb_postgres psql -U app -d knowledge -f /docker-entrypoint-initdb.d/001_init.sql`
-

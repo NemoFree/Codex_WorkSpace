@@ -142,6 +142,23 @@ KNOWLEDGE_UI_HTML = """
       flex-wrap: wrap;
       gap: 8px;
     }
+    .controls-right {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      user-select: none;
+    }
+    .toggle input {
+      width: 16px;
+      height: 16px;
+    }
     input, textarea, button {
       font: inherit;
     }
@@ -274,6 +291,13 @@ KNOWLEDGE_UI_HTML = """
     }
     .status-ok { color: #156b57; }
     .status-bad { color: var(--danger); }
+    .danger {
+      border-color: rgba(173, 63, 63, 0.35);
+      color: var(--danger);
+    }
+    .danger:hover {
+      background: rgba(173, 63, 63, 0.06);
+    }
     @media (max-width: 1024px) {
       .grid {
         grid-template-columns: 1fr;
@@ -298,7 +322,11 @@ KNOWLEDGE_UI_HTML = """
       <article class="card">
         <header class="card-hd">
           <h2>Documents</h2>
-          <div class="controls">
+          <div class="controls-right">
+            <label class="toggle">
+              <input id="autoRefresh" type="checkbox" checked />
+              <span>Auto refresh</span>
+            </label>
             <button id="refreshBtn">Refresh</button>
           </div>
         </header>
@@ -311,6 +339,13 @@ KNOWLEDGE_UI_HTML = """
           <div class="muted">Headers are used for all API calls on this page.</div>
           <div style="height: 10px"></div>
           <div id="docList" class="list"></div>
+          <div style="height: 12px"></div>
+          <h2 style="margin: 0 0 8px; font-size: 15px;">Ingest Summary</h2>
+          <div class="controls">
+            <button id="summaryBtn">Refresh Summary</button>
+          </div>
+          <div style="height: 8px"></div>
+          <p id="summaryText" class="pre">loading...</p>
         </div>
       </article>
 
@@ -321,6 +356,10 @@ KNOWLEDGE_UI_HTML = """
         </header>
         <div class="card-bd">
           <div id="docDetail" class="kv"></div>
+          <div class="controls">
+            <button id="deleteBtn" class="danger">Delete Document</button>
+            <span id="deleteMsg" class="muted"></span>
+          </div>
 
           <h2 style="margin: 0 0 8px; font-size: 15px;">Create Document</h2>
           <input id="newTitle" type="text" placeholder="Document title" />
@@ -406,6 +445,7 @@ KNOWLEDGE_UI_HTML = """
       const node = document.getElementById("docDetail");
       if (!doc) {
         node.innerHTML = "<b>Info</b><span>-</span>";
+        document.getElementById("selectedState").textContent = "none selected";
         return;
       }
       node.innerHTML = `
@@ -491,6 +531,26 @@ KNOWLEDGE_UI_HTML = """
       renderChunks(chunks.items || []);
     }
 
+    async function deleteDoc() {
+      const msg = document.getElementById("deleteMsg");
+      if (!state.selectedId) return;
+      const doc = state.docs.find((d) => d.id === state.selectedId);
+      const title = doc ? doc.title : state.selectedId;
+      if (!confirm("Delete document?\n\n" + title + "\n\nThis is a soft delete.")) return;
+      msg.textContent = "deleting...";
+      msg.className = "muted";
+      try {
+        await api("/v1/documents/" + state.selectedId, { method: "DELETE" });
+        msg.textContent = "deleted";
+        msg.className = "muted status-ok";
+        state.selectedId = null;
+        await loadDocs();
+      } catch (err) {
+        msg.textContent = String(err);
+        msg.className = "muted status-bad";
+      }
+    }
+
     async function createDoc() {
       const title = document.getElementById("newTitle").value.trim();
       const content = document.getElementById("newContent").value.trim();
@@ -532,15 +592,45 @@ KNOWLEDGE_UI_HTML = """
     }
 
     document.getElementById("refreshBtn").addEventListener("click", loadDocs);
+    document.getElementById("deleteBtn").addEventListener("click", deleteDoc);
     document.getElementById("createBtn").addEventListener("click", createDoc);
     document.getElementById("searchBtn").addEventListener("click", doSearch);
     document.getElementById("searchQuery").addEventListener("keydown", (e) => {
       if (e.key === "Enter") doSearch();
     });
 
+    async function refreshSummary() {
+      const node = document.getElementById("summaryText");
+      node.textContent = "loading...";
+      try {
+        const data = await api("/v1/admin/ingest/summary", { method: "GET" });
+        node.textContent = JSON.stringify(data, null, 2);
+      } catch (err) {
+        node.textContent = String(err);
+      }
+    }
+
+    document.getElementById("summaryBtn").addEventListener("click", refreshSummary);
+
+    function scheduleAutoRefresh() {
+      const enabled = document.getElementById("autoRefresh").checked;
+      if (!enabled) return;
+      setTimeout(async () => {
+        try {
+          await refreshHealth();
+          await refreshSummary();
+          await loadDocs();
+        } finally {
+          scheduleAutoRefresh();
+        }
+      }, 4000);
+    }
+
     (async () => {
       await refreshHealth();
+      await refreshSummary();
       await loadDocs();
+      scheduleAutoRefresh();
     })();
   </script>
 </body>
@@ -594,6 +684,64 @@ def create_document(
         ),
     )
     return {"document_id": doc_id, "status": "queued"}
+
+
+@app.get("/v1/admin/ingest/summary")
+def ingest_summary(actor: Actor = Depends(get_actor)) -> dict:
+    if actor.role != "admin":
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    queue_len = -1
+    try:
+        queue_len = int(redis_client.llen("ingest_jobs"))
+    except Exception:
+        queue_len = -1
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT status, COUNT(*)
+                FROM documents
+                WHERE tenant_id = %s AND deleted_at IS NULL
+                GROUP BY status
+                """,
+                (actor.tenant_id,),
+            )
+            rows = cur.fetchall()
+            status_counts = {r[0]: int(r[1]) for r in rows}
+
+            cur.execute(
+                """
+                SELECT d.id, d.title, d.status, d.created_at, COUNT(dc.id) AS chunk_count
+                FROM documents d
+                LEFT JOIN document_chunks dc ON dc.document_id = d.id
+                WHERE d.tenant_id = %s AND d.deleted_at IS NULL
+                GROUP BY d.id, d.title, d.status, d.created_at
+                ORDER BY d.created_at DESC
+                LIMIT 10
+                """,
+                (actor.tenant_id,),
+            )
+            recent = cur.fetchall()
+
+    recent_documents = [
+        {
+            "id": str(r[0]),
+            "title": r[1],
+            "status": r[2],
+            "created_at": r[3].isoformat() if r[3] else None,
+            "chunk_count": int(r[4]) if r[4] is not None else 0,
+        }
+        for r in recent
+    ]
+
+    return {
+        "tenant_id": actor.tenant_id,
+        "queue_len": queue_len,
+        "status_counts": status_counts,
+        "recent_documents": recent_documents,
+    }
 
 
 @app.get("/v1/documents")

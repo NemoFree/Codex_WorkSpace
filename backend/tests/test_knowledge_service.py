@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+from datetime import datetime, timezone
 import importlib.util
 import json
 import sys
@@ -115,6 +116,45 @@ class KnowledgeServiceTests(unittest.TestCase):
         self.assertEqual(len(result["hits"]), 1)
         self.assertAlmostEqual(result["hits"][0]["score"], 0.87, places=6)
         self.assertEqual(len(cursor.executions), 1)
+
+    def test_ingest_summary_forbidden_for_non_admin(self) -> None:
+        actor = knowledge.Actor(tenant_id="t1", user_id="u1", role="user")
+        with self.assertRaises(knowledge.HTTPException) as ctx:
+            knowledge.ingest_summary(actor)
+        self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_ingest_summary_admin_returns_queue_and_recent_docs(self) -> None:
+        cursor = FakeCursor(
+            fetchall_results=[
+                [("queued", 2), ("ready", 5)],
+                [
+                    (
+                        "doc-1",
+                        "Doc 1",
+                        "ready",
+                        datetime(2026, 3, 22, 12, 0, 0, tzinfo=timezone.utc),
+                        3,
+                    )
+                ],
+            ]
+        )
+        redis_mock = MagicMock()
+        redis_mock.llen.return_value = 7
+        actor = knowledge.Actor(tenant_id="t1", user_id="u1", role="admin")
+
+        with (
+            patch.object(knowledge, "get_conn", lambda: fake_get_conn(cursor)),
+            patch.object(knowledge, "redis_client", redis_mock),
+        ):
+            result = knowledge.ingest_summary(actor)
+
+        self.assertEqual(result["tenant_id"], "t1")
+        self.assertEqual(result["queue_len"], 7)
+        self.assertEqual(result["status_counts"]["queued"], 2)
+        self.assertEqual(result["status_counts"]["ready"], 5)
+        self.assertEqual(len(result["recent_documents"]), 1)
+        self.assertEqual(result["recent_documents"][0]["id"], "doc-1")
+        self.assertEqual(result["recent_documents"][0]["chunk_count"], 3)
 
 
 if __name__ == "__main__":
