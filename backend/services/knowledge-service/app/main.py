@@ -48,7 +48,7 @@ class UploadResponse(BaseModel):
     size: int
 
 
-UI_VERSION = "2026-03-22-ui-clickfix-1"
+UI_VERSION = "2026-03-22-ui-clickfix-2"
 
 KNOWLEDGE_UI_HTML = """
 <!doctype html>
@@ -620,7 +620,7 @@ KNOWLEDGE_UI_HTML = """
       if (!state.selectedId) return;
       const doc = state.docs.find((d) => d.id === state.selectedId);
       const title = doc ? doc.title : state.selectedId;
-      if (!confirm("Delete document?\n\n" + title + "\n\nThis is a soft delete.")) return;
+      if (!confirm("Delete document?\\n\\n" + title + "\\n\\nThis is a soft delete.")) return;
       msg.textContent = "deleting...";
       msg.className = "muted";
       try {
