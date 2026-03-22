@@ -1,16 +1,19 @@
 import hashlib
-import hmac
-import os
-import re
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from urllib.parse import quote, urlparse
-
-import httpx
-
-
-@dataclass(frozen=True)
-class S3Config:
+import hmac 
+import io
+import os 
+import re 
+from dataclasses import dataclass 
+from datetime import datetime, timezone 
+from urllib.parse import quote, urlparse 
+ 
+import boto3
+from botocore.client import Config as BotoConfig
+from botocore.exceptions import ClientError
+ 
+ 
+@dataclass(frozen=True) 
+class S3Config: 
     endpoint: str
     access_key: str
     secret_key: str
@@ -168,125 +171,79 @@ def _bucket_url(cfg: S3Config, bucket: str) -> str:
     return f"{cfg.endpoint.rstrip('/')}/{bucket}"
 
 
-def _object_url(cfg: S3Config, bucket: str, key: str) -> str:
-    key = key.lstrip("/")
-    return f"{cfg.endpoint.rstrip('/')}/{bucket}/{quote(key, safe='/-_.~')}"
-
-
-def ensure_bucket_exists(
-    cfg: S3Config, *, client: httpx.Client | None = None, bucket: str | None = None
-) -> None:
-    bucket = _sanitize_bucket_name(bucket or cfg.bucket)
-    close_client = False
-    if client is None:
-        client = httpx.Client(timeout=10.0)
-        close_client = True
+def _object_url(cfg: S3Config, bucket: str, key: str) -> str: 
+    key = key.lstrip("/") 
+    return f"{cfg.endpoint.rstrip('/')}/{bucket}/{quote(key, safe='/-_.~')}" 
+ 
+ 
+def _boto_client(cfg: S3Config):
+    # Use boto3/botocore for correct SigV4 signing across S3-compatible engines (MinIO).
+    return boto3.client(
+        "s3",
+        endpoint_url=cfg.endpoint,
+        aws_access_key_id=cfg.access_key,
+        aws_secret_access_key=cfg.secret_key,
+        region_name=cfg.region,
+        config=BotoConfig(signature_version="s3v4"),
+    )
+ 
+ 
+def ensure_bucket_exists( 
+    cfg: S3Config, *, client=None, bucket: str | None = None
+) -> None: 
+    bucket = _sanitize_bucket_name(bucket or cfg.bucket) 
+    s3 = client or _boto_client(cfg)
     try:
-        url = _bucket_url(cfg, bucket)
-        h = sigv4_headers(
-            method="HEAD",
-            url=url,
-            access_key=cfg.access_key,
-            secret_key=cfg.secret_key,
-            region=cfg.region,
-            service=cfg.service,
-            headers={},
-            body=b"",
-        )
-        res = client.request("HEAD", url, headers=h)
-        if res.status_code in (200, 204):
-            return
-        if res.status_code not in (400, 403, 404):
-            res.raise_for_status()
-
-        # Attempt bucket creation.
-        h2 = sigv4_headers(
-            method="PUT",
-            url=url,
-            access_key=cfg.access_key,
-            secret_key=cfg.secret_key,
-            region=cfg.region,
-            service=cfg.service,
-            headers={},
-            body=b"",
-        )
-        res2 = client.request("PUT", url, headers=h2, content=b"")
-        if res2.status_code not in (200, 204, 409):
-            res2.raise_for_status()
-    finally:
-        if close_client:
-            client.close()
-
-
-def put_bytes(
-    cfg: S3Config,
-    *,
-    key: str,
-    data: bytes,
-    content_type: str = "application/octet-stream",
-    bucket: str | None = None,
-    client: httpx.Client | None = None,
-) -> dict[str, str | int]:
-    bucket = _sanitize_bucket_name(bucket or cfg.bucket)
-    close_client = False
-    if client is None:
-        client = httpx.Client(timeout=30.0)
-        close_client = True
-    try:
-        ensure_bucket_exists(cfg, client=client, bucket=bucket)
-        url = _object_url(cfg, bucket, key)
-        signed = sigv4_headers(
-            method="PUT",
-            url=url,
-            access_key=cfg.access_key,
-            secret_key=cfg.secret_key,
-            region=cfg.region,
-            service=cfg.service,
-            headers={"content-type": content_type},
-            body=data,
-        )
-        res = client.request("PUT", url, headers=signed, content=data)
-        res.raise_for_status()
-        etag = str(res.headers.get("etag", "")).strip('"')
-        return {"bucket": bucket, "key": key, "etag": etag, "size": len(data)}
-    finally:
-        if close_client:
-            client.close()
-
-
-def get_bytes_from_storage_uri(
-    storage_uri: str,
-    *,
-    cfg: S3Config | None = None,
-    client: httpx.Client | None = None,
-    max_bytes: int | None = None,
-) -> bytes:
-    cfg = cfg or load_s3_config()
-    bucket, key = parse_storage_uri(storage_uri)
-    bucket = _sanitize_bucket_name(bucket)
-    close_client = False
-    if client is None:
-        client = httpx.Client(timeout=30.0)
-        close_client = True
-    try:
-        url = _object_url(cfg, bucket, key)
-        signed = sigv4_headers(
-            method="GET",
-            url=url,
-            access_key=cfg.access_key,
-            secret_key=cfg.secret_key,
-            region=cfg.region,
-            service=cfg.service,
-            headers={},
-            body=b"",
-        )
-        res = client.request("GET", url, headers=signed)
-        res.raise_for_status()
-        data = res.content
-        if max_bytes is not None and len(data) > max_bytes:
-            return data[:max_bytes]
-        return data
-    finally:
-        if close_client:
-            client.close()
-
+        s3.head_bucket(Bucket=bucket)
+        return
+    except ClientError as e:
+        code = str((e.response or {}).get("Error", {}).get("Code", ""))
+        # "404" and "NoSuchBucket" are the common cases across S3 engines.
+        if code not in ("404", "NoSuchBucket", "NotFound", "NoSuchBucketException"):
+            raise
+    # Attempt bucket creation.
+    s3.create_bucket(Bucket=bucket)
+ 
+ 
+def put_bytes( 
+    cfg: S3Config, 
+    *, 
+    key: str, 
+    data: bytes, 
+    content_type: str = "application/octet-stream", 
+    bucket: str | None = None, 
+    client=None,
+) -> dict[str, str | int]: 
+    bucket = _sanitize_bucket_name(bucket or cfg.bucket) 
+    s3 = client or _boto_client(cfg)
+    ensure_bucket_exists(cfg, client=s3, bucket=bucket)
+    res = s3.put_object(Bucket=bucket, Key=key, Body=data, ContentType=content_type)
+    etag = str(res.get("ETag", "")).strip('"')
+    return {"bucket": bucket, "key": key, "etag": etag, "size": len(data)} 
+ 
+ 
+def get_bytes_from_storage_uri( 
+    storage_uri: str, 
+    *, 
+    cfg: S3Config | None = None, 
+    client=None,
+    max_bytes: int | None = None, 
+) -> bytes: 
+    cfg = cfg or load_s3_config() 
+    bucket, key = parse_storage_uri(storage_uri) 
+    bucket = _sanitize_bucket_name(bucket) 
+    s3 = client or _boto_client(cfg)
+    res = s3.get_object(Bucket=bucket, Key=key)
+    body = res.get("Body")
+    if body is None:
+        return b""
+    # botocore.response.StreamingBody has .read(); BytesIO works too.
+    if max_bytes is None:
+        data = body.read()
+        return data if isinstance(data, (bytes, bytearray)) else bytes(data)
+    data = body.read(max_bytes + 1)
+    if not isinstance(data, (bytes, bytearray)):
+        data = bytes(data)
+    if len(data) > max_bytes:
+        return data[:max_bytes]
+    return data

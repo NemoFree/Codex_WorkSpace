@@ -1,48 +1,50 @@
-from pathlib import Path
-import sys
-from datetime import datetime, timezone
-from unittest.mock import patch
-import unittest
+from pathlib import Path 
+import sys 
+from datetime import datetime, timezone 
+from unittest.mock import patch, MagicMock 
+import unittest 
+import io 
 
 
 ROOT = Path(__file__).resolve().parents[2]
 BACKEND_DIR = ROOT / "backend"
 sys.path.insert(0, str(BACKEND_DIR))
 
-from libs.common_s3.s3 import S3Config, get_bytes_from_storage_uri, parse_storage_uri, put_bytes, sigv4_headers
+from libs.common_s3.s3 import (
+    S3Config,
+    get_bytes_from_storage_uri,
+    parse_storage_uri,
+    put_bytes,
+    sigv4_headers,
+)
 
 
-class _FakeResponse:
-    def __init__(self, status_code: int, *, headers=None, content: bytes = b"") -> None:
-        self.status_code = status_code
-        self.headers = dict(headers or {})
-        self.content = content
+class _FakeS3Client:
+    def __init__(self) -> None:
+        self.objects: dict[tuple[str, str], bytes] = {}
+        self._bucket_exists = False
 
-    def raise_for_status(self) -> None:
-        if self.status_code >= 400:
-            raise RuntimeError(f"http error {self.status_code}")
+    def head_bucket(self, *, Bucket: str):
+        if not self._bucket_exists:
+            from botocore.exceptions import ClientError
 
+            raise ClientError(
+                {"Error": {"Code": "404", "Message": "Not Found"}},
+                "HeadBucket",
+            )
+        return {}
 
-class _FakeClient:
-    def __init__(self, *args, **kwargs) -> None:
-        self.calls = []
-        self.objects: dict[str, bytes] = {}
+    def create_bucket(self, *, Bucket: str):
+        self._bucket_exists = True
+        return {}
 
-    def request(self, method: str, url: str, headers=None, content=None):
-        self.calls.append((method.upper(), url, dict(headers or {}), content))
-        if method.upper() == "HEAD":
-            return _FakeResponse(404, content=b"")
-        if method.upper() == "PUT" and url.endswith("/kb0"):
-            return _FakeResponse(200, content=b"")
-        if method.upper() == "PUT":
-            self.objects[url] = content or b""
-            return _FakeResponse(200, headers={"etag": '"abc123"'}, content=b"")
-        if method.upper() == "GET":
-            return _FakeResponse(200, content=self.objects.get(url, b""))
-        return _FakeResponse(200, content=b"")
+    def put_object(self, *, Bucket: str, Key: str, Body: bytes, ContentType: str):
+        self.objects[(Bucket, Key)] = Body
+        return {"ETag": '"abc123"'}
 
-    def close(self) -> None:
-        return None
+    def get_object(self, *, Bucket: str, Key: str):
+        data = self.objects.get((Bucket, Key), b"")
+        return {"Body": io.BytesIO(data)}
 
 
 class CommonS3Tests(unittest.TestCase):
@@ -76,24 +78,41 @@ class CommonS3Tests(unittest.TestCase):
         self.assertIn("x-amz-content-sha256", h)
         self.assertEqual(h["x-amz-date"], "20260322T000000Z")
 
-    def test_put_and_get_bytes_use_httpx_and_signed_headers(self) -> None:
+    def test_put_and_get_bytes_use_s3_client(self) -> None: 
+        cfg = S3Config( 
+            endpoint="http://minio:9000", 
+            access_key="minio", 
+            secret_key="minio123", 
+            bucket="kb",  # will be sanitized to kb0 
+            region="us-east-1", 
+        ) 
+        c = _FakeS3Client()
+        meta = put_bytes(cfg, key="t1/x.txt", data=b"hello", content_type="text/plain", client=c)
+        self.assertEqual(meta["bucket"], "kb0") 
+        self.assertEqual(meta["key"], "t1/x.txt") 
+        self.assertEqual(meta["size"], 5) 
+        self.assertTrue(meta["etag"]) 
+
+        data = get_bytes_from_storage_uri("s3://kb/t1/x.txt", cfg=cfg, client=c) 
+        self.assertEqual(data, b"hello") 
+
+    def test_ensure_bucket_exists_raises_on_forbidden(self) -> None:
         cfg = S3Config(
             endpoint="http://minio:9000",
-            access_key="minio",
-            secret_key="minio123",
-            bucket="kb",  # will be sanitized to kb0
+            access_key="bad",
+            secret_key="bad",
+            bucket="kbdocs",
             region="us-east-1",
         )
-        with patch("libs.common_s3.s3.httpx.Client", _FakeClient):
-            c = _FakeClient()
-            meta = put_bytes(cfg, key="t1/x.txt", data=b"hello", content_type="text/plain", client=c)
-            self.assertEqual(meta["bucket"], "kb0")
-            self.assertEqual(meta["key"], "t1/x.txt")
-            self.assertEqual(meta["size"], 5)
-            self.assertTrue(meta["etag"])
+        from botocore.exceptions import ClientError
 
-            data = get_bytes_from_storage_uri("s3://kb/t1/x.txt", cfg=cfg, client=c)
-            self.assertEqual(data, b"hello")
+        forbidden = ClientError({"Error": {"Code": "403", "Message": "Forbidden"}}, "HeadBucket")
+        s3 = MagicMock()
+        s3.head_bucket.side_effect = forbidden
+        with self.assertRaises(ClientError):
+            from libs.common_s3.s3 import ensure_bucket_exists
+
+            ensure_bucket_exists(cfg, client=s3, bucket="kbdocs")
 
 
 if __name__ == "__main__":
