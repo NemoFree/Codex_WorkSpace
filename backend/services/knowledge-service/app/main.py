@@ -33,6 +33,8 @@ class SearchRequest(BaseModel):
     top_k: int = Field(default=5, ge=1, le=20)
 
 
+UI_VERSION = "2026-03-22-ui-feedback-2"
+
 KNOWLEDGE_UI_HTML = """
 <!doctype html>
 <html lang="en">
@@ -323,6 +325,11 @@ KNOWLEDGE_UI_HTML = """
       color: #156b57;
     }
     .toast.hidden { display: none; }
+    #createMsg, #deleteMsg {
+      display: block;
+      margin-top: 8px;
+      min-height: 16px;
+    }
     @media (max-width: 1024px) {
       .grid {
         grid-template-columns: 1fr;
@@ -338,7 +345,7 @@ KNOWLEDGE_UI_HTML = """
     <section class="topbar">
       <div>
         <h1 class="title">Knowledge Console</h1>
-        <p class="sub">Read and operate your current knowledge base in one page.</p>
+        <p class="sub">Read and operate your current knowledge base in one page. <span class="muted">ui:__UI_VERSION__</span></p>
       </div>
       <div class="pill"><span id="healthDot" class="dot"></span><span id="healthText">checking service...</span></div>
     </section>
@@ -382,17 +389,17 @@ KNOWLEDGE_UI_HTML = """
         <div class="card-bd">
           <div id="docDetail" class="kv"></div>
           <div class="controls">
-            <button id="deleteBtn" class="danger">Delete Document</button>
-            <span id="deleteMsg" class="muted"></span>
-          </div>
+          <button id="deleteBtn" type="button" class="danger">Delete Document</button>
+          <span id="deleteMsg" class="muted"></span>
+        </div>
 
-          <h2 style="margin: 0 0 8px; font-size: 15px;">Create Document</h2>
-          <input id="newTitle" type="text" placeholder="Document title" />
-          <div style="height: 8px"></div>
-          <textarea id="newContent" placeholder="Paste text content for indexing..."></textarea>
-          <div style="height: 8px"></div>
-          <button id="createBtn" class="btn-accent">Create & Queue</button>
-          <span id="createMsg" class="muted"></span>
+        <h2 style="margin: 0 0 8px; font-size: 15px;">Create Document</h2>
+        <input id="newTitle" type="text" placeholder="Document title" />
+        <div style="height: 8px"></div>
+        <textarea id="newContent" placeholder="Paste text content for indexing..."></textarea>
+        <div style="height: 8px"></div>
+        <button id="createBtn" type="button" class="btn-accent">Create & Queue</button>
+        <span id="createMsg" class="muted"></span>
 
           <div style="height: 16px"></div>
           <h2 style="margin: 0 0 8px; font-size: 15px;">Chunks</h2>
@@ -402,10 +409,10 @@ KNOWLEDGE_UI_HTML = """
           <h2 style="margin: 0 0 8px; font-size: 15px;">Search (RAG)</h2>
           <input id="searchQuery" type="text" placeholder="Try: smoke test pgvector" />
           <div style="height: 8px"></div>
-          <button id="searchBtn">Search</button>
-          <div style="height: 8px"></div>
-          <div id="hits"></div>
-        </div>
+        <button id="searchBtn" type="button">Search</button>
+        <div style="height: 8px"></div>
+        <div id="hits"></div>
+      </div>
       </article>
     </section>
   </div>
@@ -608,6 +615,7 @@ KNOWLEDGE_UI_HTML = """
       }
       msg.textContent = "creating...";
       msg.className = "muted";
+      showToast("creating...", "");
       if (btn) {
         btn.disabled = true;
         btn.textContent = "Creating...";
@@ -704,7 +712,15 @@ def healthz() -> dict[str, str]:
 
 @app.get("/ui/knowledge", response_class=HTMLResponse)
 def knowledge_ui() -> str:
-    return KNOWLEDGE_UI_HTML
+    # Avoid stale UI during fast iteration or when multiple containers are restarted.
+    html = KNOWLEDGE_UI_HTML.replace("__UI_VERSION__", UI_VERSION)
+    return HTMLResponse(
+        content=html,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+        },
+    )
 
 
 @app.post("/v1/documents")
